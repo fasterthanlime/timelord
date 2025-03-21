@@ -26,7 +26,10 @@ jobs:
               with:
                   command: clippy
                   args: -- -D warnings
-            - name: Build
-              run: cargo build --verbose
-            - name: Run self-test
-              run: cargo run -- --self-test
+            - name: Install cargo-nextest
+              uses: taiki-e/install-action@nextest
+            - name: Run tests
+              uses: actions-rs/cargo@v1
+              with:
+                  command: nextest
+                  args: run --no-capture

@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use ignore::DirEntry;
 use ignore::WalkBuilder;
 use rayon::iter::IntoParallelRefIterator;
@@ -16,6 +16,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+#[cfg(test)]
+mod tests;
 
 /// Represents a workspace with a source directory
 #[derive(Clone)]
@@ -46,6 +49,45 @@ struct HashedFile {
 #[derive(Serialize, Deserialize)]
 struct SourceDir {
     entries: BTreeMap<RelativePath, HashedFile>,
+}
+
+#[derive(Debug, Clone)]
+struct DirectoryInfo {
+    files: usize,
+    total_size: u64,
+    subdirectories: BTreeMap<String, DirectoryInfo>,
+}
+
+impl DirectoryInfo {
+    fn new() -> Self {
+        DirectoryInfo {
+            files: 0,
+            total_size: 0,
+            subdirectories: BTreeMap::new(),
+        }
+    }
+
+    fn add_file(&mut self, size: u64) {
+        self.files += 1;
+        self.total_size += size;
+    }
+
+    fn print(&self, prefix: &str, name: &str) {
+        if self.files > 0 {
+            println!(
+                "{}{}/  ({} files, {})",
+                prefix,
+                name,
+                self.files,
+                human_bytes::human_bytes(self.total_size as f64)
+            );
+        } else {
+            println!("{}{}/  (empty)", prefix, name);
+        }
+        for (subdir_name, subdir_info) in &self.subdirectories {
+            subdir_info.print(&format!("{}  ", prefix), subdir_name);
+        }
+    }
 }
 
 fn walk_source_dir(workspace: &Workspace) -> SourceDir {
@@ -99,19 +141,30 @@ fn walk_source_dir(workspace: &Workspace) -> SourceDir {
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 /// A tool to preserve file timestamps (mtime) between CI builds, even with fresh git checkouts.
-///
-/// This tool works by storing a database of file sizes and hashes. It requires two directories:
-/// 1. A source directory where it will restore old timestamps if file contents remain the same.
-/// 2. A cache directory that should be persistent across CI builds to store the timestamp database.
 struct Args {
-    /// The source directory containing files to preserve timestamps for.
-    #[arg(long)]
-    source_dir: Utf8PathBuf,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// The cache directory to store the timestamp database, should be persistent across CI builds.
-    /// The file will be written in the cache directory as `timelord.db`.
-    #[arg(long)]
-    cache_dir: Utf8PathBuf,
+#[derive(Subcommand, Debug, Clone)]
+enum Command {
+    /// Synchronize timestamps between the source directory and cache
+    Sync {
+        /// The source directory containing files to preserve timestamps for.
+        #[arg(long)]
+        source_dir: Utf8PathBuf,
+
+        /// The cache directory to store the timestamp database, should be persistent across CI builds.
+        /// The file will be written in the cache directory as `timelord.db`.
+        #[arg(long)]
+        cache_dir: Utf8PathBuf,
+    },
+    /// Display information about the cache
+    CacheInfo {
+        /// The cache directory containing the timelord.db file
+        #[arg(long)]
+        cache_dir: Utf8PathBuf,
+    },
 }
 
 use owo_colors::OwoColorize;
@@ -258,29 +311,35 @@ fn save_new_cache(new_source_dir: &SourceDir, cache_file: &Utf8PathBuf) {
         new_source_dir.entries.len().to_string().yellow()
     );
     eprintln!(
-        "💾 Cache file size: {} bytes",
-        cache_size.to_string().yellow()
+        "💾 Cache file size: {}",
+        human_bytes::human_bytes(cache_size as f64).yellow()
     );
 }
 
 fn main() {
-    // Check for self-test flag
-    if std::env::args().any(|arg| arg == "--self-test") {
-        self_test();
-        std::process::exit(0);
-    }
-
     let args = Args::parse();
     main_with_args(args);
 }
 
 fn main_with_args(args: Args) {
-    let cache_file = args.cache_dir.join("timelord.db");
+    match args.command {
+        Command::Sync {
+            source_dir,
+            cache_dir,
+        } => {
+            sync(source_dir, cache_dir);
+        }
+        Command::CacheInfo { cache_dir } => {
+            cache_info(cache_dir);
+        }
+    }
+}
+
+fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
+    let cache_file = cache_dir.join("timelord.db");
     let start = Instant::now();
 
-    let workspace = Workspace {
-        source_dir: args.source_dir,
-    };
+    let workspace = Workspace { source_dir };
 
     let (old_source_dir, new_source_dir) = {
         let cache_file_clone = cache_file.clone();
@@ -321,219 +380,32 @@ fn main_with_args(args: Args) {
     eprintln!("🎉 All done! Total time: {:?}", total_time.green());
 }
 
-fn self_test() {
-    use std::fs::{self, File};
-    use std::io::Write;
-    use std::time::SystemTime;
-
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
-    eprintln!("{}", "Starting Timelord Self-Test".green());
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
-
-    // Create temporary directories for source and cache
-    let temp_dir = tempfile::tempdir().unwrap();
-    let source_dir = temp_dir.path().join("source");
-    let cache_dir = temp_dir.path().join("cache");
-    fs::create_dir_all(&source_dir).unwrap();
-    eprintln!("{}", "Created temporary directories:".yellow());
-    eprintln!("  Source: {}", source_dir.display().blue());
-    eprintln!("  Cache: {}", cache_dir.display().blue());
-
-    // Create some test files
-    let file1_path = source_dir.join("file1.txt");
-    let file2_path = source_dir.join("file2.txt");
-    let mut file1 = File::create(&file1_path).unwrap();
-    let mut file2 = File::create(&file2_path).unwrap();
-    file1.write_all(b"Hello, World!").unwrap();
-    file2.write_all(b"Timelord test").unwrap();
-    eprintln!("{}", "Created test files:".yellow());
-    eprintln!("  {}: 'Hello, World!'", file1_path.display().blue());
-    eprintln!("  {}: 'Timelord test'", file2_path.display().blue());
-
-    eprintln!(
-        "\n{}",
-        "===============================================".blue()
-    );
-    eprintln!("{}", "Scenario 1: First Run - Creating Cache".green());
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
-    // Run Timelord for the first time
-    let args = Args {
-        source_dir: Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
-        cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-    };
-    main_with_args(args.clone());
-
-    // Check if the database was created
+fn cache_info(cache_dir: Utf8PathBuf) {
     let cache_file = cache_dir.join("timelord.db");
-    assert!(cache_file.exists(), "Database file was not created");
-    eprintln!(
-        "Cache file created successfully: {}",
-        cache_file.display().green()
-    );
+    if !cache_file.exists() {
+        eprintln!("❌ Cache file not found: {}", cache_file.to_string().red());
+        return;
+    }
 
-    eprintln!(
-        "\n{}",
-        "===============================================".blue()
-    );
-    eprintln!("{}", "Scenario 2: Modifying Timestamps".green());
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
-    // Change all timestamps
-    let new_time = SystemTime::now() - std::time::Duration::from_secs(3600);
-    File::open(&file1_path)
-        .unwrap()
-        .set_modified(new_time)
-        .unwrap();
-    File::open(&file2_path)
-        .unwrap()
-        .set_modified(new_time)
-        .unwrap();
-    eprintln!(
-        "{}",
-        "Modified timestamps of both files to 1 hour ago".yellow()
-    );
+    let source_dir = read_or_create_cache(&cache_file);
+    let cache_size = fs::metadata(&cache_file).unwrap().len();
 
-    // Run Timelord again
-    eprintln!("{}", "Running Timelord to restore timestamps...".cyan());
-    main_with_args(args.clone());
+    println!("📊 Cache Information:");
+    println!("   Entries: {}", source_dir.entries.len());
+    println!("   Size: {}", human_bytes::human_bytes(cache_size as f64));
 
-    // Check if timestamps were restored
-    let file1_time = fs::metadata(&file1_path).unwrap().modified().unwrap();
-    let file2_time = fs::metadata(&file2_path).unwrap().modified().unwrap();
-    assert!(file1_time != new_time, "File1 timestamp was not restored");
-    assert!(file2_time != new_time, "File2 timestamp was not restored");
-    eprintln!(
-        "{}",
-        "Timestamps successfully restored for both files".green()
-    );
+    let mut root = DirectoryInfo::new();
+    for (path, file) in &source_dir.entries {
+        let mut current = &mut root;
+        for name in path.0.components() {
+            current = current
+                .subdirectories
+                .entry(name.to_string())
+                .or_insert_with(DirectoryInfo::new);
+        }
+        current.add_file(file.size);
+    }
 
-    eprintln!(
-        "\n{}",
-        "===============================================".blue()
-    );
-    eprintln!("{}", "Scenario 3: Modifying Content and Timestamps".green());
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
-    // Change timestamps again and modify one file
-    let another_new_time = SystemTime::now() - std::time::Duration::from_secs(7200);
-    File::open(&file1_path)
-        .unwrap()
-        .set_modified(another_new_time)
-        .unwrap();
-    let mut file2 = File::create(&file2_path).unwrap();
-    file2.write_all(b"Modified content").unwrap();
-    file2.set_modified(another_new_time).unwrap();
-    eprintln!(
-        "{}",
-        "Modified timestamps of both files to 2 hours ago".yellow()
-    );
-    eprintln!(
-        "{}",
-        "Changed content of file2 to 'Modified content'".yellow()
-    );
-
-    // Run Timelord one more time
-    eprintln!(
-        "{}",
-        "Running Timelord to selectively restore timestamps...".cyan()
-    );
-    main_with_args(args.clone());
-
-    // Check if timestamps were restored correctly
-    let file1_final_time = fs::metadata(&file1_path).unwrap().modified().unwrap();
-    let file2_final_time = fs::metadata(&file2_path).unwrap().modified().unwrap();
-    assert!(
-        file1_final_time != another_new_time,
-        "File1 timestamp was not restored after content remained unchanged"
-    );
-    assert!(
-        file2_final_time == another_new_time,
-        "File2 timestamp was correctly not restored after content change"
-    );
-    eprintln!("{}", "File1 timestamp restored (content unchanged)".green());
-    eprintln!(
-        "{}",
-        "File2 timestamp not restored (content changed)".green()
-    );
-
-    eprintln!(
-        "\n{}",
-        "===============================================".blue()
-    );
-    eprintln!("{}", "Scenario 4: Different Source Directory Base".green());
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
-    // Create a new source directory with the same structure
-    let new_source_dir = temp_dir.path().join("new_source");
-    fs::create_dir_all(&new_source_dir).unwrap();
-    let new_file1_path = new_source_dir.join("file1.txt");
-    let new_file2_path = new_source_dir.join("file2.txt");
-    fs::copy(&file1_path, &new_file1_path).unwrap();
-    fs::copy(&file2_path, &new_file2_path).unwrap();
-
-    // Modify timestamps of the new files
-    let new_time = SystemTime::now() - std::time::Duration::from_secs(3600);
-    File::open(&new_file1_path)
-        .unwrap()
-        .set_modified(new_time)
-        .unwrap();
-    File::open(&new_file2_path)
-        .unwrap()
-        .set_modified(new_time)
-        .unwrap();
-
-    eprintln!(
-        "{}",
-        "Created new source directory with same files".yellow()
-    );
-    eprintln!("  New Source: {}", new_source_dir.display().blue());
-
-    // Run Timelord with the new source directory
-    let new_args = Args {
-        source_dir: Utf8PathBuf::from_path_buf(new_source_dir).unwrap(),
-        cache_dir: args.cache_dir.clone(),
-    };
-    eprintln!("{}", "Running Timelord with new source directory...".cyan());
-    main_with_args(new_args);
-
-    // Check if timestamps were restored in the new location
-    let new_file1_time = fs::metadata(&new_file1_path).unwrap().modified().unwrap();
-    let new_file2_time = fs::metadata(&new_file2_path).unwrap().modified().unwrap();
-    assert!(
-        new_file1_time != new_time,
-        "New file1 timestamp was not restored"
-    );
-    assert!(
-        new_file2_time != new_time,
-        "New file2 timestamp was not restored"
-    );
-    eprintln!(
-        "{}",
-        "Timestamps successfully restored in new location".green()
-    );
-
-    eprintln!(
-        "\n{}",
-        "===============================================".blue()
-    );
-    eprintln!("{}", "Self-test completed successfully!".green());
-    eprintln!(
-        "{}",
-        "===============================================".blue()
-    );
+    println!("\n📁 Directory Structure:");
+    root.print("", ".");
 }
