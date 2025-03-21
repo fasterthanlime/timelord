@@ -11,10 +11,12 @@ human_bytes = "0.4.3"
 humantime = "2.2.0"
 ignore = "0.4.23"
 jiff = "0.2.4"
+log = "0.4.26"
 owo-colors = "4.2.0"
 rayon = "1.10.0"
 seahash = "4.1.0"
 serde = { version = "1.0.219", features = ["derive"] }
 
 [dev-dependencies]
+env_logger = "0.11.7"
 tempfile = "3.19.1"
