@@ -8,9 +8,7 @@ use rayon::iter::ParallelIterator;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File};
-use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::io::Write;
 use std::sync::atomic::AtomicUsize;
@@ -47,9 +45,27 @@ struct HashedFile {
     timestamp: std::time::SystemTime,
 }
 
+pub const TIMELORD_SOURCEDIR_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize)]
 struct SourceDir {
     entries: BTreeMap<RelativePath, HashedFile>,
+    version: u32,
+    crawl_time: std::time::SystemTime,
+    absolute_path: Utf8PathBuf,
+    hostname: String,
+}
+
+impl SourceDir {
+    fn new(absolute_path: Utf8PathBuf) -> Self {
+        SourceDir {
+            entries: BTreeMap::new(),
+            version: TIMELORD_SOURCEDIR_VERSION,
+            crawl_time: std::time::SystemTime::now(),
+            absolute_path,
+            hostname: hostname::get().unwrap().to_string_lossy().into_owned(),
+        }
+    }
 }
 
 fn walk_source_dir(workspace: &Workspace) -> SourceDir {
@@ -71,9 +87,7 @@ fn walk_source_dir(workspace: &Workspace) -> SourceDir {
                     let mut contents = Vec::new();
                     file.read_to_end(&mut contents).unwrap();
 
-                    let mut hasher = DefaultHasher::new();
-                    contents.hash(&mut hasher);
-                    let hash = hasher.finish();
+                    let hash = seahash::hash(&contents);
 
                     let size = contents.len() as u64;
                     let timestamp = file.metadata().unwrap().modified().unwrap();
@@ -97,7 +111,9 @@ fn walk_source_dir(workspace: &Workspace) -> SourceDir {
         .into_inner()
         .expect("Failed to get inner value");
 
-    SourceDir { entries }
+    let mut source_dir = SourceDir::new(workspace.source_dir.clone());
+    source_dir.entries = entries;
+    source_dir
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -132,21 +148,57 @@ enum Command {
 use owo_colors::OwoColorize;
 use std::thread;
 
-fn read_or_create_cache(cache_file: &Utf8PathBuf) -> SourceDir {
-    let start = Instant::now();
-    let old_source_dir = if cache_file.exists() {
-        eprintln!("🔍 Reading cache file: {}", cache_file.to_string().blue());
-        let contents = fs::read(cache_file).expect("Failed to read cache file");
-        bincode::serde::decode_from_slice(&contents, bincode::config::standard())
-            .expect("Failed to deserialize cache")
-            .0
-    } else {
+fn bad_cache_disclaimer(message: &str) {
+    eprintln!("\n{}", "=".repeat(80).red());
+    eprintln!("⚠️  {} ⚠️", message.bold().red());
+    eprintln!("{}\n", "=".repeat(80).red());
+}
+
+fn read_cache(cache_file: &Utf8PathBuf) -> Option<SourceDir> {
+    if !cache_file.exists() {
         eprintln!(
             "🆕 No cache file found at {}, starting fresh!",
             cache_file.to_string().blue()
         );
-        SourceDir {
-            entries: BTreeMap::new(),
+        return None;
+    }
+
+    eprintln!("🔍 Reading cache file: {}", cache_file.to_string().blue());
+
+    let contents = match fs::read(cache_file) {
+        Ok(c) => c,
+        Err(e) => {
+            bad_cache_disclaimer(&format!("Failed to read cache file: {}", e));
+            return None;
+        }
+    };
+
+    let (source_dir, _) = match bincode::serde::decode_from_slice::<SourceDir, _>(
+        &contents,
+        bincode::config::standard(),
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            bad_cache_disclaimer(&format!("Failed to deserialize cache: {}", e));
+            return None;
+        }
+    };
+
+    if source_dir.version != TIMELORD_SOURCEDIR_VERSION {
+        bad_cache_disclaimer("Cache file has wrong version, starting fresh!");
+        return None;
+    }
+
+    Some(source_dir)
+}
+
+fn read_or_create_cache(cache_file: &Utf8PathBuf) -> SourceDir {
+    let start = Instant::now();
+    let old_source_dir = match read_cache(cache_file) {
+        Some(cache) => cache,
+        None => {
+            eprintln!("⚠️ Falling back to new SourceDir due to cache read failure");
+            SourceDir::new(Utf8PathBuf::new())
         }
     };
     let deserialize_time = start.elapsed();
@@ -195,12 +247,6 @@ fn update_timestamps(
                     let current_count = updated_count.fetch_add(1, Ordering::Relaxed);
                     #[allow(clippy::comparison_chain)]
                     if current_count < 5 {
-                        fn format_timestamp(timestamp: std::time::SystemTime) -> String {
-                            jiff::Timestamp::try_from(timestamp)
-                                .unwrap()
-                                .strftime("%Y-%m-%d %H:%M:%S")
-                                .to_string()
-                        }
                         fn format_timestamp_diff(
                             old: std::time::SystemTime,
                             new: std::time::SystemTime,
@@ -412,6 +458,16 @@ fn cache_info(cache_dir: Utf8PathBuf) {
         "   Size: {}",
         human_bytes::human_bytes(cache_size as f64).green()
     );
+    eprintln!(
+        "   Crawl time: {}",
+        format_timestamp(source_dir.crawl_time).cyan()
+    );
+    eprintln!("   Hostname: {}", source_dir.hostname.magenta());
+    eprintln!(
+        "   Absolute path: {}",
+        source_dir.absolute_path.to_string().blue()
+    );
+    eprintln!("   Version: {}", source_dir.version.to_string().yellow());
 
     let mut root = DirectoryInfo::new();
     for (path, file) in &source_dir.entries {
@@ -427,4 +483,11 @@ fn cache_info(cache_dir: Utf8PathBuf) {
 
     eprintln!("\n📁 Directory Structure:");
     root.print("", ".");
+}
+
+fn format_timestamp(timestamp: std::time::SystemTime) -> String {
+    jiff::Timestamp::try_from(timestamp)
+        .unwrap()
+        .strftime("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }

@@ -281,4 +281,63 @@ fn self_test() {
         "{}",
         "===============================================".blue()
     );
+
+    eprintln!(
+        "\n{}",
+        "===============================================".blue()
+    );
+    eprintln!("{}", "Scenario 5: Corrupted Cache File".green());
+    eprintln!(
+        "{}",
+        "===============================================".blue()
+    );
+
+    // Corrupt the cache file
+    let mut cache_file = File::options()
+        .write(true)
+        .open(&cache_file)
+        .expect("Failed to open cache file");
+    cache_file
+        .write_all(&[0xBA, 0xDB, 0xAD, 0xFF])
+        .expect("Failed to write corrupt data");
+    cache_file.flush().expect("Failed to flush cache file");
+
+    eprintln!("{}", "Corrupted cache file with 0xBADBADFF".yellow());
+
+    // Run Timelord with corrupted cache
+    eprintln!("{}", "Running Timelord with corrupted cache...".cyan());
+    main_with_args(Args {
+        command: Command::Sync {
+            source_dir: Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
+            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+        },
+    });
+
+    // Check if a new cache file was created
+    assert!(
+        cache_file.metadata().unwrap().len() > 0,
+        "New cache file was not created or is empty after corruption"
+    );
+    eprintln!(
+        "{}",
+        "Timelord handled corrupted cache and created a new one".green()
+    );
+
+    // Run cache-info command
+    eprintln!("\n{}", "Running cache-info command:".cyan());
+    main_with_args(Args {
+        command: Command::CacheInfo {
+            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+        },
+    });
+
+    eprintln!(
+        "\n{}",
+        "===============================================".blue()
+    );
+    eprintln!("{}", "All scenarios completed successfully!".green());
+    eprintln!(
+        "{}",
+        "===============================================".blue()
+    );
 }
