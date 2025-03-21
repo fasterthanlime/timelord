@@ -1,0 +1,20 @@
+[package]
+name = "timelord"
+version = "3.0.0"
+edition = "2024"
+
+[dependencies]
+bincode = { version = "2.0.1", features = ["serde"] }
+camino = { version = "1.1.9", features = ["serde1"] }
+hostname = "0.4.0"
+human_bytes = "0.4.3"
+humantime = "2.2.0"
+ignore = "0.4.23"
+jiff = "0.2.4"
+owo-colors = "4.2.0"
+rayon = "1.10.0"
+seahash = "4.1.0"
+serde = { version = "1.0.219", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.19.1"

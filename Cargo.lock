@@ -518,7 +518,6 @@ version = "3.0.0"
 dependencies = [
  "bincode",
  "camino",
- "clap",
  "hostname",
  "human_bytes",
  "humantime",
@@ -529,6 +528,15 @@ dependencies = [
  "seahash",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "timelord-cli"
+version = "3.0.0"
+dependencies = [
+ "camino",
+ "clap",
+ "timelord",
 ]
 
 [[package]]

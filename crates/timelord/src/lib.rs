@@ -1,6 +1,5 @@
 // Always use eprintln! instead of println! for output
 use camino::Utf8PathBuf;
-use clap::{Parser, Subcommand};
 use ignore::DirEntry;
 use ignore::WalkBuilder;
 use rayon::iter::IntoParallelRefIterator;
@@ -21,33 +20,38 @@ mod tests;
 
 /// Represents a workspace with a source directory
 #[derive(Clone)]
-struct Workspace {
-    source_dir: Utf8PathBuf,
+pub struct Workspace {
+    pub source_dir: Utf8PathBuf,
 }
 
 /// Represents a relative path within the workspace
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone)]
 #[serde(transparent)]
-struct RelativePath(Utf8PathBuf);
+pub struct RelativePath(Utf8PathBuf);
 
 impl RelativePath {
     /// Converts the relative path to an absolute path within the workspace
-    fn to_absolute_path(&self, workspace: &Workspace) -> Utf8PathBuf {
+    pub fn to_absolute_path(&self, workspace: &Workspace) -> Utf8PathBuf {
         workspace.source_dir.join(&self.0)
     }
 }
 
 #[derive(Serialize, Deserialize)]
-struct HashedFile {
-    path: RelativePath,
-    hash: Hash,
-    size: u64,
-    timestamp: std::time::SystemTime,
+pub struct HashedFile {
+    /// The relative path of the file within the workspace
+    pub path: RelativePath,
+    /// A hash of the file's contents
+    pub hash: Hash,
+    /// The size of the file in bytes
+    pub size: u64,
+    /// The mtime of the file (last we checked)
+    pub timestamp: std::time::SystemTime,
 }
 
+/// The seahash of a file
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(transparent)]
-struct Hash(u64);
+pub struct Hash(pub u64);
 
 impl std::fmt::Display for Hash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,16 +62,16 @@ impl std::fmt::Display for Hash {
 pub const TIMELORD_CACHE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
-struct Cache {
-    entries: BTreeMap<RelativePath, HashedFile>,
-    version: u32,
-    crawl_time: std::time::SystemTime,
-    absolute_path: Utf8PathBuf,
-    hostname: String,
+pub struct Cache {
+    pub entries: BTreeMap<RelativePath, HashedFile>,
+    pub version: u32,
+    pub crawl_time: std::time::SystemTime,
+    pub absolute_path: Utf8PathBuf,
+    pub hostname: String,
 }
 
 impl Cache {
-    fn new(absolute_path: Utf8PathBuf) -> Self {
+    pub fn new(absolute_path: Utf8PathBuf) -> Self {
         Cache {
             entries: BTreeMap::new(),
             version: TIMELORD_CACHE_VERSION,
@@ -78,7 +82,7 @@ impl Cache {
     }
 }
 
-fn walk_source_dir(workspace: &Workspace) -> Cache {
+pub fn walk_source_dir(workspace: &Workspace) -> Cache {
     let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
     WalkBuilder::new(&workspace.source_dir)
@@ -127,45 +131,16 @@ fn walk_source_dir(workspace: &Workspace) -> Cache {
     source_dir
 }
 
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-/// A tool to preserve file timestamps (mtime) between CI builds, even with fresh git checkouts.
-struct Args {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-enum Command {
-    /// Synchronize timestamps between the source directory and cache
-    Sync {
-        /// The source directory containing files to preserve timestamps for.
-        #[arg(long)]
-        source_dir: Utf8PathBuf,
-
-        /// The cache directory to store the timestamp database, should be persistent across CI builds.
-        /// The file will be written in the cache directory as `timelord.db`.
-        #[arg(long)]
-        cache_dir: Utf8PathBuf,
-    },
-    /// Display information about the cache
-    CacheInfo {
-        /// The cache directory containing the timelord.db file
-        #[arg(long)]
-        cache_dir: Utf8PathBuf,
-    },
-}
-
 use owo_colors::OwoColorize;
 use std::thread;
 
-fn bad_cache_disclaimer(message: &str) {
+pub fn bad_cache_disclaimer(message: &str) {
     eprintln!("\n{}", "=".repeat(80).red());
     eprintln!("⚠️  {} ⚠️", message.bold().red());
     eprintln!("{}\n", "=".repeat(80).red());
 }
 
-fn read_cache(cache_file: &Utf8PathBuf) -> Option<Cache> {
+pub fn read_cache(cache_file: &Utf8PathBuf) -> Option<Cache> {
     if !cache_file.exists() {
         eprintln!(
             "🆕 No cache file found at {}, starting fresh!",
@@ -201,7 +176,7 @@ fn read_cache(cache_file: &Utf8PathBuf) -> Option<Cache> {
     Some(source_dir)
 }
 
-fn read_or_create_cache(cache_file: &Utf8PathBuf) -> Cache {
+pub fn read_or_create_cache(cache_file: &Utf8PathBuf) -> Cache {
     let start = Instant::now();
     let old_source_dir = match read_cache(cache_file) {
         Some(cache) => cache,
@@ -331,32 +306,7 @@ fn save_new_cache(new_source_dir: &Cache, cache_file: &Utf8PathBuf) {
     print_cache_info(new_source_dir, cache_file);
 }
 
-fn main() {
-    let args = Args::parse();
-    main_with_args(args);
-}
-
-fn main_with_args(args: Args) {
-    match args.command {
-        Command::Sync {
-            source_dir,
-            cache_dir,
-        } => {
-            eprintln!("====================");
-            eprintln!("The Time Lord is logging on");
-            eprintln!("====================");
-            sync(source_dir, cache_dir);
-            eprintln!("====================");
-            eprintln!("The Time Lord is taking his leave");
-            eprintln!("====================");
-        }
-        Command::CacheInfo { cache_dir } => {
-            cache_info(cache_dir);
-        }
-    }
-}
-
-fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
+pub fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
     let cache_file = cache_dir.join("timelord.db");
     let start = Instant::now();
 
@@ -450,7 +400,7 @@ impl DirectoryInfo {
     }
 }
 
-fn cache_info(cache_dir: Utf8PathBuf) {
+pub fn cache_info(cache_dir: Utf8PathBuf) {
     let cache_file = cache_dir.join("timelord.db");
     if !cache_file.exists() {
         eprintln!("❌ Cache file not found: {}", cache_file.to_string().red());

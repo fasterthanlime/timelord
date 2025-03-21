@@ -1,8 +1,6 @@
 use camino::Utf8PathBuf;
 use owo_colors::OwoColorize;
 
-use super::{Args, Command, main_with_args};
-
 #[test]
 fn self_test() {
     use std::fs::{self, File};
@@ -55,12 +53,10 @@ fn self_test() {
         "===============================================".blue()
     );
     // Run Timelord for the first time
-    main_with_args(Args {
-        command: Command::Sync {
-            source_dir: Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::sync(
+        Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
+        Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+    );
 
     // Check if the database was created
     let cache_file = cache_dir.join("timelord.db");
@@ -72,11 +68,7 @@ fn self_test() {
 
     // Run cache-info command
     eprintln!("\n{}", "Running cache-info command:".cyan());
-    main_with_args(Args {
-        command: Command::CacheInfo {
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::cache_info(Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap());
 
     eprintln!(
         "\n{}",
@@ -104,12 +96,10 @@ fn self_test() {
 
     // Run Timelord again
     eprintln!("{}", "Running Timelord to restore timestamps...".cyan());
-    main_with_args(Args {
-        command: Command::Sync {
-            source_dir: Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::sync(
+        Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
+        Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+    );
 
     // Check if timestamps were restored
     let file1_time = fs::metadata(&file1_path).unwrap().modified().unwrap();
@@ -129,11 +119,7 @@ fn self_test() {
 
     // Run cache-info command
     eprintln!("\n{}", "Running cache-info command:".cyan());
-    main_with_args(Args {
-        command: Command::CacheInfo {
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::cache_info(Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap());
 
     eprintln!(
         "\n{}",
@@ -167,12 +153,10 @@ fn self_test() {
         "{}",
         "Running Timelord to selectively restore timestamps...".cyan()
     );
-    main_with_args(Args {
-        command: Command::Sync {
-            source_dir: Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::sync(
+        Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
+        Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+    );
 
     // Check if timestamps were restored correctly
     let file1_final_time = fs::metadata(&file1_path).unwrap().modified().unwrap();
@@ -196,11 +180,7 @@ fn self_test() {
 
     // Run cache-info command
     eprintln!("\n{}", "Running cache-info command:".cyan());
-    main_with_args(Args {
-        command: Command::CacheInfo {
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::cache_info(Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap());
 
     eprintln!(
         "\n{}",
@@ -241,12 +221,10 @@ fn self_test() {
 
     // Run Timelord with the new source directory
     eprintln!("{}", "Running Timelord with new source directory...".cyan());
-    main_with_args(Args {
-        command: Command::Sync {
-            source_dir: Utf8PathBuf::from_path_buf(new_source_dir.clone()).unwrap(),
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::sync(
+        Utf8PathBuf::from_path_buf(new_source_dir.clone()).unwrap(),
+        Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+    );
 
     // Check if timestamps were restored in the new location
     let new_file1_time = fs::metadata(&new_file1_path).unwrap().modified().unwrap();
@@ -266,11 +244,7 @@ fn self_test() {
 
     // Run cache-info command
     eprintln!("\n{}", "Running cache-info command:".cyan());
-    main_with_args(Args {
-        command: Command::CacheInfo {
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::cache_info(Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap());
 
     eprintln!(
         "\n{}",
@@ -306,12 +280,10 @@ fn self_test() {
 
     // Run Timelord with corrupted cache
     eprintln!("{}", "Running Timelord with corrupted cache...".cyan());
-    main_with_args(Args {
-        command: Command::Sync {
-            source_dir: Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::sync(
+        Utf8PathBuf::from_path_buf(source_dir.clone()).unwrap(),
+        Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
+    );
 
     // Check if a new cache file was created
     assert!(
@@ -325,11 +297,7 @@ fn self_test() {
 
     // Run cache-info command
     eprintln!("\n{}", "Running cache-info command:".cyan());
-    main_with_args(Args {
-        command: Command::CacheInfo {
-            cache_dir: Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap(),
-        },
-    });
+    super::cache_info(Utf8PathBuf::from_path_buf(cache_dir.clone()).unwrap());
 
     eprintln!(
         "\n{}",
