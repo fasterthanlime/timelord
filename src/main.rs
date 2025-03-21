@@ -174,6 +174,12 @@ fn save_new_cache(new_source_dir: &SourceDir, cache_file: &Utf8PathBuf) {
     let serialize_start = Instant::now();
     let serialized = bincode::serde::encode_to_vec(new_source_dir, bincode::config::standard())
         .expect("Failed to serialize new source dir");
+
+    // Create the directory if it doesn't exist
+    if let Some(parent) = cache_file.parent() {
+        fs::create_dir_all(parent).expect("Failed to create cache directory");
+    }
+
     let mut file = File::create(cache_file).expect("Failed to create cache file");
     file.write_all(&serialized)
         .expect("Failed to write cache file");
@@ -261,7 +267,6 @@ fn self_test() {
     let source_dir = temp_dir.path().join("source");
     let cache_dir = temp_dir.path().join("cache");
     fs::create_dir_all(&source_dir).unwrap();
-    fs::create_dir_all(&cache_dir).unwrap();
     eprintln!("{}", "Created temporary directories:".yellow());
     eprintln!("  Source: {}", source_dir.display().blue());
     eprintln!("  Cache: {}", cache_dir.display().blue());
