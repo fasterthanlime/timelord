@@ -150,7 +150,7 @@ fn read_or_create_cache(cache_file: &Utf8PathBuf) -> SourceDir {
         }
     };
     let deserialize_time = start.elapsed();
-    eprintln!("⏱️  Deserialization took: {:?}", deserialize_time.blue());
+    eprintln!("⏰ Deserialization took: {:?}", deserialize_time.blue());
     eprintln!(
         "📊 Old cache entries: {}",
         old_source_dir.entries.len().to_string().yellow()
@@ -166,7 +166,7 @@ fn scan_source_directory(workspace: &Workspace) -> SourceDir {
     let scan_start = Instant::now();
     let new_source_dir = walk_source_dir(workspace);
     let scan_time = scan_start.elapsed();
-    eprintln!("⏱️  Directory scan took: {:?}", scan_time.blue());
+    eprintln!("⏰ Directory scan took: {:?}", scan_time.blue());
     new_source_dir
 }
 
@@ -175,7 +175,7 @@ fn update_timestamps(
     new_source_dir: &SourceDir,
     workspace: &Workspace,
 ) {
-    eprintln!("🕰️  Updating file timestamps...");
+    eprintln!("⏰ Updating file timestamps...");
     let update_start = Instant::now();
 
     let updated_count = AtomicUsize::new(0);
@@ -240,7 +240,7 @@ fn update_timestamps(
     let updated_count = updated_count.load(Ordering::Relaxed);
     let different_count = different_count.load(Ordering::Relaxed);
     let update_time = update_start.elapsed();
-    eprintln!("⏱️  Timestamp update took: {:?}", update_time.blue());
+    eprintln!("⏰ Timestamp update took: {:?}", update_time.blue());
     eprintln!("✅ Restored {} file timestamps", updated_count.green());
     eprintln!(
         "🔄 Found {} different or new files",
@@ -263,7 +263,7 @@ fn save_new_cache(new_source_dir: &SourceDir, cache_file: &Utf8PathBuf) {
     file.write_all(&serialized)
         .expect("Failed to write cache file");
     let serialize_time = serialize_start.elapsed();
-    eprintln!("⏱️  Cache serialization took: {:?}", serialize_time.blue());
+    eprintln!("⏰ Cache serialization took: {:?}", serialize_time.blue());
 
     let cache_size = fs::metadata(cache_file)
         .expect("Failed to get cache file metadata")
