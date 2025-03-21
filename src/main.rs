@@ -30,7 +30,7 @@ struct SourceDir {
     entries: BTreeMap<Utf8PathBuf, HashedFile>,
 }
 
-fn source_dir(path: &Utf8PathBuf) -> SourceDir {
+fn walk_source_dir(path: &Utf8PathBuf) -> SourceDir {
     let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
     WalkBuilder::new(path).build_parallel().run(|| {
@@ -91,16 +91,14 @@ struct Args {
     cache_dir: Utf8PathBuf,
 }
 
-fn main() {
-    use owo_colors::OwoColorize;
+use owo_colors::OwoColorize;
+use std::thread;
 
-    let args = Args::parse();
-
-    let cache_file = args.cache_dir.join("timelord.db");
+fn read_or_create_cache(cache_file: &Utf8PathBuf) -> SourceDir {
     let start = Instant::now();
     let old_source_dir = if cache_file.exists() {
         eprintln!("🔍 Reading cache file: {}", cache_file.to_string().blue());
-        let contents = fs::read(&cache_file).expect("Failed to read cache file");
+        let contents = fs::read(cache_file).expect("Failed to read cache file");
         bincode::serde::decode_from_slice(&contents, bincode::config::standard())
             .expect("Failed to deserialize cache")
             .0
@@ -115,16 +113,26 @@ fn main() {
     };
     let deserialize_time = start.elapsed();
     eprintln!("⏱️  Deserialization took: {:?}", deserialize_time.blue());
+    eprintln!(
+        "📊 Old cache entries: {}",
+        old_source_dir.entries.len().to_string().yellow()
+    );
+    old_source_dir
+}
 
+fn scan_source_directory(source_dir: &Utf8PathBuf) -> SourceDir {
     eprintln!(
         "🔍 Scanning source directory: {}",
-        args.source_dir.to_string().blue()
+        source_dir.to_string().blue()
     );
     let scan_start = Instant::now();
-    let new_source_dir = source_dir(&args.source_dir);
+    let new_source_dir = walk_source_dir(source_dir);
     let scan_time = scan_start.elapsed();
     eprintln!("⏱️  Directory scan took: {:?}", scan_time.blue());
+    new_source_dir
+}
 
+fn update_timestamps(old_source_dir: &SourceDir, new_source_dir: &SourceDir) {
     eprintln!("🕰️  Updating file timestamps...");
     let update_start = Instant::now();
 
@@ -159,16 +167,66 @@ fn main() {
         "🔄 Found {} different or new files",
         different_count.yellow()
     );
+}
 
+fn save_new_cache(new_source_dir: &SourceDir, cache_file: &Utf8PathBuf) {
     eprintln!("💾 Saving new cache to {}", cache_file.to_string().blue());
     let serialize_start = Instant::now();
-    let serialized = bincode::serde::encode_to_vec(&new_source_dir, bincode::config::standard())
+    let serialized = bincode::serde::encode_to_vec(new_source_dir, bincode::config::standard())
         .expect("Failed to serialize new source dir");
-    let mut file = File::create(&cache_file).expect("Failed to create cache file");
+    let mut file = File::create(cache_file).expect("Failed to create cache file");
     file.write_all(&serialized)
         .expect("Failed to write cache file");
     let serialize_time = serialize_start.elapsed();
     eprintln!("⏱️  Cache serialization took: {:?}", serialize_time.blue());
+
+    let cache_size = fs::metadata(cache_file)
+        .expect("Failed to get cache file metadata")
+        .len();
+    eprintln!(
+        "📊 New cache entries: {}",
+        new_source_dir.entries.len().to_string().yellow()
+    );
+    eprintln!(
+        "💾 Cache file size: {} bytes",
+        cache_size.to_string().yellow()
+    );
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let cache_file = args.cache_dir.join("timelord.db");
+    let start = Instant::now();
+
+    let (old_source_dir, new_source_dir) = {
+        let cache_file_clone = cache_file.clone();
+        let source_dir_clone = args.source_dir.clone();
+        let cache_reader_handle = thread::spawn(move || read_or_create_cache(&cache_file_clone));
+        let source_scanner_handle = thread::spawn(move || scan_source_directory(&source_dir_clone));
+        (
+            cache_reader_handle.join().unwrap(),
+            source_scanner_handle.join().unwrap(),
+        )
+    };
+
+    let old_source_dir = Arc::new(old_source_dir);
+    let new_source_dir = Arc::new(new_source_dir);
+
+    let (timestamp_updater_handle, cache_saver_handle) = {
+        let old_source_dir_clone = Arc::clone(&old_source_dir);
+        let new_source_dir_clone1 = Arc::clone(&new_source_dir);
+        let new_source_dir_clone2 = Arc::clone(&new_source_dir);
+        let cache_file_clone = cache_file.clone();
+        let timestamp_updater_handle =
+            thread::spawn(move || update_timestamps(&old_source_dir_clone, &new_source_dir_clone1));
+        let cache_saver_handle =
+            thread::spawn(move || save_new_cache(&new_source_dir_clone2, &cache_file_clone));
+        (timestamp_updater_handle, cache_saver_handle)
+    };
+
+    timestamp_updater_handle.join().unwrap();
+    cache_saver_handle.join().unwrap();
 
     let total_time = start.elapsed();
     eprintln!("🎉 All done! Total time: {:?}", total_time.green());
