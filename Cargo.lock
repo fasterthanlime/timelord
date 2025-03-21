@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "timelord"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "bincode",
  "camino",
