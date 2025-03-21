@@ -270,7 +270,7 @@ fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: 
                         cause
                     );
                 } else if dirty_count_so_far == 5 {
-                    eprintln!("(other dirty files ignored)");
+                    eprintln!("  {}", "(other dirty files ignored)".dimmed());
                 }
             } else {
                 let old_entry = old_entry.unwrap();
@@ -295,7 +295,7 @@ fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: 
                         format_timestamp_diff(old_entry.timestamp, new_entry.timestamp)
                     );
                 } else if fresh_count_so_far == 5 {
-                    eprintln!("(other fresh files ignored)");
+                    eprintln!("  {}", "(other fresh files ignored)".dimmed());
                 }
             }
         });
