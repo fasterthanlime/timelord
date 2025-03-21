@@ -40,15 +40,25 @@ impl RelativePath {
 #[derive(Serialize, Deserialize)]
 struct HashedFile {
     path: RelativePath,
-    hash: u64,
+    hash: Hash,
     size: u64,
     timestamp: std::time::SystemTime,
 }
 
-pub const TIMELORD_SOURCEDIR_VERSION: u32 = 1;
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+struct Hash(u64);
+
+impl std::fmt::Display for Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+pub const TIMELORD_CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
-struct SourceDir {
+struct Cache {
     entries: BTreeMap<RelativePath, HashedFile>,
     version: u32,
     crawl_time: std::time::SystemTime,
@@ -56,11 +66,11 @@ struct SourceDir {
     hostname: String,
 }
 
-impl SourceDir {
+impl Cache {
     fn new(absolute_path: Utf8PathBuf) -> Self {
-        SourceDir {
+        Cache {
             entries: BTreeMap::new(),
-            version: TIMELORD_SOURCEDIR_VERSION,
+            version: TIMELORD_CACHE_VERSION,
             crawl_time: std::time::SystemTime::now(),
             absolute_path,
             hostname: hostname::get().unwrap().to_string_lossy().into_owned(),
@@ -68,7 +78,7 @@ impl SourceDir {
     }
 }
 
-fn walk_source_dir(workspace: &Workspace) -> SourceDir {
+fn walk_source_dir(workspace: &Workspace) -> Cache {
     let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
     WalkBuilder::new(&workspace.source_dir)
@@ -79,15 +89,16 @@ fn walk_source_dir(workspace: &Workspace) -> SourceDir {
             Box::new(move |entry: Result<DirEntry, ignore::Error>| {
                 let entry = entry.unwrap();
                 if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    let path = Utf8PathBuf::try_from(entry.into_path())
-                        .expect("timelord only abides by utf-8 files");
+                    let path =
+                        Utf8PathBuf::try_from(entry.path().to_owned()).unwrap_or_else(|_| {
+                            panic!("Non-UTF-8 filepath encountered: {}", entry.path().display())
+                        });
                     let relative_path =
                         RelativePath(path.strip_prefix(&workspace.source_dir).unwrap().to_owned());
                     let mut file = File::open(&path).unwrap();
                     let mut contents = Vec::new();
                     file.read_to_end(&mut contents).unwrap();
-
-                    let hash = seahash::hash(&contents);
+                    let hash = Hash(seahash::hash(&contents));
 
                     let size = contents.len() as u64;
                     let timestamp = file.metadata().unwrap().modified().unwrap();
@@ -111,7 +122,7 @@ fn walk_source_dir(workspace: &Workspace) -> SourceDir {
         .into_inner()
         .expect("Failed to get inner value");
 
-    let mut source_dir = SourceDir::new(workspace.source_dir.clone());
+    let mut source_dir = Cache::new(workspace.source_dir.clone());
     source_dir.entries = entries;
     source_dir
 }
@@ -154,7 +165,7 @@ fn bad_cache_disclaimer(message: &str) {
     eprintln!("{}\n", "=".repeat(80).red());
 }
 
-fn read_cache(cache_file: &Utf8PathBuf) -> Option<SourceDir> {
+fn read_cache(cache_file: &Utf8PathBuf) -> Option<Cache> {
     if !cache_file.exists() {
         eprintln!(
             "🆕 No cache file found at {}, starting fresh!",
@@ -162,7 +173,6 @@ fn read_cache(cache_file: &Utf8PathBuf) -> Option<SourceDir> {
         );
         return None;
     }
-
     eprintln!("🔍 Reading cache file: {}", cache_file.to_string().blue());
 
     let contents = match fs::read(cache_file) {
@@ -173,18 +183,17 @@ fn read_cache(cache_file: &Utf8PathBuf) -> Option<SourceDir> {
         }
     };
 
-    let (source_dir, _) = match bincode::serde::decode_from_slice::<SourceDir, _>(
-        &contents,
-        bincode::config::standard(),
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            bad_cache_disclaimer(&format!("Failed to deserialize cache: {}", e));
-            return None;
-        }
-    };
+    let (source_dir, _) =
+        match bincode::serde::decode_from_slice::<Cache, _>(&contents, bincode::config::standard())
+        {
+            Ok(result) => result,
+            Err(e) => {
+                bad_cache_disclaimer(&format!("Failed to deserialize cache: {}", e));
+                return None;
+            }
+        };
 
-    if source_dir.version != TIMELORD_SOURCEDIR_VERSION {
+    if source_dir.version != TIMELORD_CACHE_VERSION {
         bad_cache_disclaimer("Cache file has wrong version, starting fresh!");
         return None;
     }
@@ -192,25 +201,21 @@ fn read_cache(cache_file: &Utf8PathBuf) -> Option<SourceDir> {
     Some(source_dir)
 }
 
-fn read_or_create_cache(cache_file: &Utf8PathBuf) -> SourceDir {
+fn read_or_create_cache(cache_file: &Utf8PathBuf) -> Cache {
     let start = Instant::now();
     let old_source_dir = match read_cache(cache_file) {
         Some(cache) => cache,
         None => {
-            eprintln!("⚠️ Falling back to new SourceDir due to cache read failure");
-            SourceDir::new(Utf8PathBuf::new())
+            eprintln!("⚠️ Falling back to empty cache");
+            Cache::new(Utf8PathBuf::new())
         }
     };
     let deserialize_time = start.elapsed();
     eprintln!("⏰ Deserialization took: {:?}", deserialize_time.blue());
-    eprintln!(
-        "📊 Old cache entries: {}",
-        old_source_dir.entries.len().to_string().yellow()
-    );
     old_source_dir
 }
 
-fn scan_source_directory(workspace: &Workspace) -> SourceDir {
+fn scan_source_directory(workspace: &Workspace) -> Cache {
     eprintln!(
         "🔍 Scanning source directory: {}",
         workspace.source_dir.to_string().blue()
@@ -222,79 +227,91 @@ fn scan_source_directory(workspace: &Workspace) -> SourceDir {
     new_source_dir
 }
 
-fn update_timestamps(
-    old_source_dir: &SourceDir,
-    new_source_dir: &SourceDir,
-    workspace: &Workspace,
-) {
+fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: &Workspace) {
     eprintln!("⏰ Updating file timestamps...");
     let update_start = Instant::now();
 
-    let updated_count = AtomicUsize::new(0);
-    let different_count = AtomicUsize::new(0);
+    let fresh_count = AtomicUsize::new(0);
+    let dirty_count = AtomicUsize::new(0);
     new_source_dir
         .entries
         .par_iter()
         .for_each(|(path, new_entry)| {
-            if let Some(old_entry) = old_source_dir.entries.get(path) {
-                if new_entry.hash == old_entry.hash && new_entry.size == old_entry.size {
+            #[derive(Debug)]
+            enum DirtyReason {
+                New,
+                HashChanged,
+                SizeChanged,
+            }
+
+            let old_entry = old_source_dir.entries.get(path);
+            let cause = if let Some(old_entry) = old_entry {
+                if new_entry.hash != old_entry.hash {
+                    Some(DirtyReason::HashChanged)
+                } else if new_entry.size != old_entry.size {
+                    Some(DirtyReason::SizeChanged)
+                } else {
+                    None
+                }
+            } else {
+                Some(DirtyReason::New)
+            };
+
+            if let Some(cause) = cause {
+                dirty_count.fetch_add(1, Ordering::Relaxed);
+                let dirty_count_so_far = dirty_count.load(Ordering::Relaxed);
+                if dirty_count_so_far <= 5 {
+                    eprintln!(
+                        "  {} {} ({}, {}) - {:?}",
+                        "[dirty]".red(),
+                        path.0.to_string().dimmed(),
+                        new_entry.hash.blue(),
+                        human_bytes::human_bytes(new_entry.size as f64).yellow(),
+                        cause
+                    );
+                } else if dirty_count_so_far == 5 {
+                    eprintln!("(other dirty files ignored)");
+                }
+            } else {
+                let old_entry = old_entry.unwrap();
+                if new_entry.timestamp != old_entry.timestamp {
                     let absolute_path = path.to_absolute_path(workspace);
                     std::fs::File::open(&absolute_path)
                         .and_then(|f| f.set_modified(old_entry.timestamp))
                         .unwrap_or_else(|e| {
                             eprintln!("❌ Failed to set mtime for {}: {}", absolute_path.red(), e);
                         });
-                    let current_count = updated_count.fetch_add(1, Ordering::Relaxed);
-                    #[allow(clippy::comparison_chain)]
-                    if current_count < 5 {
-                        fn format_timestamp_diff(
-                            old: std::time::SystemTime,
-                            new: std::time::SystemTime,
-                        ) -> String {
-                            let old_str = format_timestamp(old);
-                            let new_str = format_timestamp(new);
-                            let mut result = String::new();
-                            for (old_char, new_char) in old_str.chars().zip(new_str.chars()) {
-                                if old_char == new_char {
-                                    result.push(new_char);
-                                } else {
-                                    result.push_str(&new_char.to_string().red().to_string());
-                                }
-                            }
-                            result
-                        }
-
-                        eprintln!(
-                            "🔄 {} ({:#016x}, {}, {} => {})",
-                            path.0.to_string().green(),
-                            new_entry.hash.blue(),
-                            human_bytes::human_bytes(new_entry.size as f64).yellow(),
-                            format_timestamp(old_entry.timestamp).red(),
-                            format_timestamp_diff(old_entry.timestamp, new_entry.timestamp)
-                        );
-                    } else if current_count == 5 {
-                        eprintln!("(not printing rest of paths, we were just giving examples)");
-                    }
-                } else {
-                    different_count.fetch_add(1, Ordering::Relaxed);
                 }
-            } else {
-                different_count.fetch_add(1, Ordering::Relaxed);
+                let fresh_count_so_far = fresh_count.fetch_add(1, Ordering::Relaxed);
+                #[allow(clippy::comparison_chain)]
+                if fresh_count_so_far < 5 {
+                    eprintln!(
+                        "  {} {} ({}, {}, {} => {})",
+                        "[fresh]".green(),
+                        path.0.to_string().dimmed(),
+                        new_entry.hash.blue(),
+                        human_bytes::human_bytes(new_entry.size as f64).yellow(),
+                        format_timestamp(old_entry.timestamp).red(),
+                        format_timestamp_diff(old_entry.timestamp, new_entry.timestamp)
+                    );
+                } else if fresh_count_so_far == 5 {
+                    eprintln!("(other fresh files ignored)");
+                }
             }
         });
 
-    let updated_count = updated_count.load(Ordering::Relaxed);
-    let different_count = different_count.load(Ordering::Relaxed);
+    let fresh_count = fresh_count.load(Ordering::Relaxed);
+    let dirty_count = dirty_count.load(Ordering::Relaxed);
     let update_time = update_start.elapsed();
-    eprintln!("⏰ Timestamp update took: {:?}", update_time.blue());
-    eprintln!("✅ Restored {} file timestamps", updated_count.green());
     eprintln!(
-        "🔄 Found {} different or new files",
-        different_count.yellow()
+        "⏰ Spent {:?} syncing ({} fresh, {} dirty)",
+        update_time.blue(),
+        fresh_count.green(),
+        dirty_count.yellow()
     );
 }
 
-fn save_new_cache(new_source_dir: &SourceDir, cache_file: &Utf8PathBuf) {
+fn save_new_cache(new_source_dir: &Cache, cache_file: &Utf8PathBuf) {
     eprintln!("💾 Saving new cache to {}", cache_file.to_string().blue());
     let serialize_start = Instant::now();
     let serialized = bincode::serde::encode_to_vec(new_source_dir, bincode::config::standard())
@@ -311,17 +328,7 @@ fn save_new_cache(new_source_dir: &SourceDir, cache_file: &Utf8PathBuf) {
     let serialize_time = serialize_start.elapsed();
     eprintln!("⏰ Cache serialization took: {:?}", serialize_time.blue());
 
-    let cache_size = fs::metadata(cache_file)
-        .expect("Failed to get cache file metadata")
-        .len();
-    eprintln!(
-        "📊 New cache entries: {}",
-        new_source_dir.entries.len().to_string().yellow()
-    );
-    eprintln!(
-        "💾 Cache file size: {}",
-        human_bytes::human_bytes(cache_size as f64).yellow()
-    );
+    print_cache_info(new_source_dir, cache_file);
 }
 
 fn main() {
@@ -335,7 +342,13 @@ fn main_with_args(args: Args) {
             source_dir,
             cache_dir,
         } => {
+            eprintln!("====================");
+            eprintln!("The Time Lord is logging on");
+            eprintln!("====================");
             sync(source_dir, cache_dir);
+            eprintln!("====================");
+            eprintln!("The Time Lord is taking his leave");
+            eprintln!("====================");
         }
         Command::CacheInfo { cache_dir } => {
             cache_info(cache_dir);
@@ -350,10 +363,14 @@ fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
     let workspace = Workspace { source_dir };
 
     let (old_source_dir, new_source_dir) = {
-        let cache_file_clone = cache_file.clone();
-        let workspace_clone = workspace.clone();
-        let cache_reader_handle = thread::spawn(move || read_or_create_cache(&cache_file_clone));
-        let source_scanner_handle = thread::spawn(move || scan_source_directory(&workspace_clone));
+        let cache_file = cache_file.clone();
+        let workspace = workspace.clone();
+        let cache_reader_handle = thread::spawn(move || {
+            let sd = read_or_create_cache(&cache_file);
+            print_cache_info(&sd, &cache_file);
+            sd
+        });
+        let source_scanner_handle = thread::spawn(move || scan_source_directory(&workspace));
         (
             cache_reader_handle.join().unwrap(),
             source_scanner_handle.join().unwrap(),
@@ -364,20 +381,15 @@ fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
     let new_source_dir = Arc::new(new_source_dir);
 
     let (timestamp_updater_handle, cache_saver_handle) = {
-        let old_source_dir_clone = Arc::clone(&old_source_dir);
-        let new_source_dir_clone1 = Arc::clone(&new_source_dir);
-        let new_source_dir_clone2 = Arc::clone(&new_source_dir);
-        let cache_file_clone = cache_file.clone();
-        let workspace_clone = workspace.clone();
-        let timestamp_updater_handle = thread::spawn(move || {
-            update_timestamps(
-                &old_source_dir_clone,
-                &new_source_dir_clone1,
-                &workspace_clone,
-            )
-        });
+        let old_source_dir = Arc::clone(&old_source_dir);
+        let new_source_dir1 = Arc::clone(&new_source_dir);
+        let new_source_dir2 = Arc::clone(&new_source_dir);
+        let cache_file = cache_file.clone();
+        let workspace = workspace.clone();
+        let timestamp_updater_handle =
+            thread::spawn(move || update_timestamps(&old_source_dir, &new_source_dir1, &workspace));
         let cache_saver_handle =
-            thread::spawn(move || save_new_cache(&new_source_dir_clone2, &cache_file_clone));
+            thread::spawn(move || save_new_cache(&new_source_dir2, &cache_file));
         (timestamp_updater_handle, cache_saver_handle)
     };
 
@@ -445,32 +457,49 @@ fn cache_info(cache_dir: Utf8PathBuf) {
         return;
     }
 
-    let source_dir = read_or_create_cache(&cache_file);
-    let cache_size = fs::metadata(&cache_file).unwrap().len();
+    let source_dir = match read_cache(&cache_file) {
+        Some(source_dir) => source_dir,
+        None => {
+            eprintln!(
+                "❌ Failed to read cache file: {}",
+                cache_file.to_string().red()
+            );
+            return;
+        }
+    };
+    print_cache_info(&source_dir, &cache_file);
+}
 
-    eprintln!("{}", "📊 Cache Information:".blue());
-    eprintln!("   Cache file: {}", cache_file.to_string().blue());
+fn print_cache_info(cache: &Cache, cache_file: &Utf8PathBuf) {
+    let cache_size = match fs::metadata(cache_file) {
+        Ok(metadata) => metadata.len(),
+        Err(_) => {
+            eprintln!("Cache not created yet");
+            return;
+        }
+    };
     eprintln!(
-        "   Entries: {}",
-        source_dir.entries.len().to_string().yellow()
+        "   Cache is {}, tracking {} entries (version {})",
+        human_bytes::human_bytes(cache_size as f64).green(),
+        cache.entries.len().to_string().yellow(),
+        cache.version.to_string().cyan(),
     );
     eprintln!(
-        "   Size: {}",
-        human_bytes::human_bytes(cache_size as f64).green()
+        "   Crawled {} ago ({}) on {} from source dir {}",
+        humantime::format_duration(
+            std::time::SystemTime::now()
+                .duration_since(cache.crawl_time)
+                .unwrap()
+        )
+        .to_string()
+        .cyan(),
+        format_timestamp(cache.crawl_time).cyan(),
+        cache.hostname.magenta(),
+        cache.absolute_path.to_string().blue()
     );
-    eprintln!(
-        "   Crawl time: {}",
-        format_timestamp(source_dir.crawl_time).cyan()
-    );
-    eprintln!("   Hostname: {}", source_dir.hostname.magenta());
-    eprintln!(
-        "   Absolute path: {}",
-        source_dir.absolute_path.to_string().blue()
-    );
-    eprintln!("   Version: {}", source_dir.version.to_string().yellow());
 
     let mut root = DirectoryInfo::new();
-    for (path, file) in &source_dir.entries {
+    for (path, file) in &cache.entries {
         let mut current = &mut root;
         for name in path.0.components().take(path.0.components().count() - 1) {
             current = current
@@ -482,7 +511,7 @@ fn cache_info(cache_dir: Utf8PathBuf) {
     }
 
     eprintln!("\n📁 Directory Structure:");
-    root.print("", ".");
+    root.print("  ", ".");
 }
 
 fn format_timestamp(timestamp: std::time::SystemTime) -> String {
@@ -490,4 +519,18 @@ fn format_timestamp(timestamp: std::time::SystemTime) -> String {
         .unwrap()
         .strftime("%Y-%m-%d %H:%M:%S")
         .to_string()
+}
+
+fn format_timestamp_diff(old: std::time::SystemTime, new: std::time::SystemTime) -> String {
+    let old_str = format_timestamp(old);
+    let new_str = format_timestamp(new);
+    let mut result = String::new();
+    for (old_char, new_char) in old_str.chars().zip(new_str.chars()) {
+        if old_char == new_char {
+            result.push(new_char);
+        } else {
+            result.push_str(&new_char.to_string().red().to_string());
+        }
+    }
+    result
 }
