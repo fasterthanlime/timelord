@@ -1,3 +1,4 @@
+// Always use eprintln! instead of println! for output
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use ignore::DirEntry;
@@ -49,45 +50,6 @@ struct HashedFile {
 #[derive(Serialize, Deserialize)]
 struct SourceDir {
     entries: BTreeMap<RelativePath, HashedFile>,
-}
-
-#[derive(Debug, Clone)]
-struct DirectoryInfo {
-    files: usize,
-    total_size: u64,
-    subdirectories: BTreeMap<String, DirectoryInfo>,
-}
-
-impl DirectoryInfo {
-    fn new() -> Self {
-        DirectoryInfo {
-            files: 0,
-            total_size: 0,
-            subdirectories: BTreeMap::new(),
-        }
-    }
-
-    fn add_file(&mut self, size: u64) {
-        self.files += 1;
-        self.total_size += size;
-    }
-
-    fn print(&self, prefix: &str, name: &str) {
-        if self.files > 0 {
-            println!(
-                "{}{}/  ({} files, {})",
-                prefix,
-                name,
-                self.files,
-                human_bytes::human_bytes(self.total_size as f64)
-            );
-        } else {
-            println!("{}{}/  (empty)", prefix, name);
-        }
-        for (subdir_name, subdir_info) in &self.subdirectories {
-            subdir_info.print(&format!("{}  ", prefix), subdir_name);
-        }
-    }
 }
 
 fn walk_source_dir(workspace: &Workspace) -> SourceDir {
@@ -380,6 +342,56 @@ fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
     eprintln!("🎉 All done! Total time: {:?}", total_time.green());
 }
 
+#[derive(Debug, Clone)]
+struct DirectoryInfo {
+    files: usize,
+    total_size: u64,
+    subdirectories: BTreeMap<String, DirectoryInfo>,
+}
+
+impl DirectoryInfo {
+    fn new() -> Self {
+        DirectoryInfo {
+            files: 0,
+            total_size: 0,
+            subdirectories: BTreeMap::new(),
+        }
+    }
+
+    fn add_file(&mut self, size: u64) {
+        self.files += 1;
+        self.total_size += size;
+    }
+
+    fn print(&self, prefix: &str, name: &str) {
+        use owo_colors::OwoColorize;
+        if self.subdirectories.is_empty() {
+            if self.files > 0 {
+                eprintln!(
+                    "{}{}/  ({} files, {})",
+                    prefix,
+                    name.blue(),
+                    self.files.to_string().yellow(),
+                    human_bytes::human_bytes(self.total_size as f64).green()
+                );
+            } else {
+                eprintln!("{}{}/  ({})", prefix, name.blue(), "empty".red());
+            }
+        } else {
+            eprintln!(
+                "{}{}/  ({} files, {})",
+                prefix,
+                name.blue(),
+                self.files.to_string().yellow(),
+                human_bytes::human_bytes(self.total_size as f64).green()
+            );
+            for (subdir_name, subdir_info) in &self.subdirectories {
+                subdir_info.print(&format!("{}  ", prefix), subdir_name);
+            }
+        }
+    }
+}
+
 fn cache_info(cache_dir: Utf8PathBuf) {
     let cache_file = cache_dir.join("timelord.db");
     if !cache_file.exists() {
@@ -390,14 +402,21 @@ fn cache_info(cache_dir: Utf8PathBuf) {
     let source_dir = read_or_create_cache(&cache_file);
     let cache_size = fs::metadata(&cache_file).unwrap().len();
 
-    println!("📊 Cache Information:");
-    println!("   Entries: {}", source_dir.entries.len());
-    println!("   Size: {}", human_bytes::human_bytes(cache_size as f64));
+    eprintln!("{}", "📊 Cache Information:".blue());
+    eprintln!("   Cache file: {}", cache_file.to_string().blue());
+    eprintln!(
+        "   Entries: {}",
+        source_dir.entries.len().to_string().yellow()
+    );
+    eprintln!(
+        "   Size: {}",
+        human_bytes::human_bytes(cache_size as f64).green()
+    );
 
     let mut root = DirectoryInfo::new();
     for (path, file) in &source_dir.entries {
         let mut current = &mut root;
-        for name in path.0.components() {
+        for name in path.0.components().take(path.0.components().count() - 1) {
             current = current
                 .subdirectories
                 .entry(name.to_string())
@@ -406,6 +425,6 @@ fn cache_info(cache_dir: Utf8PathBuf) {
         current.add_file(file.size);
     }
 
-    println!("\n📁 Directory Structure:");
+    eprintln!("\n📁 Directory Structure:");
     root.print("", ".");
 }
