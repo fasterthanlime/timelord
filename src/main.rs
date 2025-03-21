@@ -55,7 +55,7 @@ impl std::fmt::Display for Hash {
     }
 }
 
-pub const TIMELORD_CACHE_VERSION: u32 = 2;
+pub const TIMELORD_CACHE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct Cache {
