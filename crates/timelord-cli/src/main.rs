@@ -1,3 +1,4 @@
+#[doc = include_str!("../README.md")]
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 
