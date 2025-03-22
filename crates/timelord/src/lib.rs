@@ -90,6 +90,7 @@ pub fn walk_source_dir(workspace: &Workspace) -> Cache {
 
     WalkBuilder::new(&workspace.source_dir)
         .standard_filters(false)
+        .git_ignore(true)
         .build_parallel()
         .run(|| {
             let entries_clone = Arc::clone(&entries);
