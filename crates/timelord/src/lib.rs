@@ -5,7 +5,7 @@ use camino::Utf8PathBuf;
 use ignore::DirEntry;
 use ignore::WalkBuilder;
 use log::*;
-use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 use serde::Deserialize;
 use serde::Serialize;
@@ -200,15 +200,17 @@ fn scan_source_directory(workspace: &Workspace) -> Cache {
     new_source_dir
 }
 
-fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: &Workspace) {
+fn update_timestamps(old_source_dir: &Cache, new_source_dir: &mut Cache, workspace: &Workspace) {
     debug!("⏰ Updating file timestamps...");
     let update_start = Instant::now();
 
     let fresh_count = AtomicUsize::new(0);
     let dirty_count = AtomicUsize::new(0);
+    let entries_mutex = Arc::new(Mutex::new(()));
+
     new_source_dir
         .entries
-        .par_iter()
+        .par_iter_mut()
         .for_each(|(path, new_entry)| {
             #[derive(Debug)]
             enum DirtyReason {
@@ -234,6 +236,7 @@ fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: 
                 dirty_count.fetch_add(1, Ordering::Relaxed);
                 let dirty_count_so_far = dirty_count.load(Ordering::Relaxed);
                 if dirty_count_so_far <= 5 {
+                    let _lock = entries_mutex.lock().unwrap();
                     debug!(
                         "  {} {} ({}, {}) - {:?}",
                         "[dirty]".red(),
@@ -243,21 +246,27 @@ fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: 
                         cause
                     );
                 } else if dirty_count_so_far == 5 {
+                    let _lock = entries_mutex.lock().unwrap();
                     debug!("  {}", "(other dirty files ignored)");
                 }
             } else {
                 let old_entry = old_entry.unwrap();
                 if new_entry.timestamp != old_entry.timestamp {
                     let absolute_path = path.to_absolute_path(workspace);
-                    std::fs::File::open(&absolute_path)
-                        .and_then(|f| f.set_modified(old_entry.timestamp))
-                        .unwrap_or_else(|e| {
-                            warn!("❌ Failed to set mtime for {}: {}", absolute_path, e);
-                        });
+                    if let Ok(f) = std::fs::File::open(&absolute_path) {
+                        if f.set_modified(old_entry.timestamp).is_ok() {
+                            // Update the cache entry with the restored timestamp
+                            new_entry.timestamp = old_entry.timestamp;
+                        } else {
+                            let _lock = entries_mutex.lock().unwrap();
+                            warn!("❌ Failed to set mtime for {}", absolute_path);
+                        }
+                    }
                 }
                 let fresh_count_so_far = fresh_count.fetch_add(1, Ordering::Relaxed);
                 #[allow(clippy::comparison_chain)]
                 if fresh_count_so_far < 5 {
+                    let _lock = entries_mutex.lock().unwrap();
                     debug!(
                         "  {} {} ({}, {}, {} => {})",
                         "[fresh]".green(),
@@ -268,6 +277,7 @@ fn update_timestamps(old_source_dir: &Cache, new_source_dir: &Cache, workspace: 
                         format_timestamp_diff(old_entry.timestamp, new_entry.timestamp)
                     );
                 } else if fresh_count_so_far == 5 {
+                    let _lock = entries_mutex.lock().unwrap();
                     debug!("  {}", "(other fresh files ignored)");
                 }
             }
@@ -306,7 +316,7 @@ pub fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
 
     let workspace = Workspace { source_dir };
 
-    let (old_source_dir, new_source_dir) = {
+    let (old_source_dir, mut new_source_dir) = {
         let cache_file = cache_file.clone();
         let workspace = workspace.clone();
         let cache_reader_handle = thread::spawn(move || {
@@ -321,24 +331,11 @@ pub fn sync(source_dir: Utf8PathBuf, cache_dir: Utf8PathBuf) {
         )
     };
 
-    let old_source_dir = Arc::new(old_source_dir);
-    let new_source_dir = Arc::new(new_source_dir);
+    // First update timestamps
+    update_timestamps(&old_source_dir, &mut new_source_dir, &workspace);
 
-    let (timestamp_updater_handle, cache_saver_handle) = {
-        let old_source_dir = Arc::clone(&old_source_dir);
-        let new_source_dir1 = Arc::clone(&new_source_dir);
-        let new_source_dir2 = Arc::clone(&new_source_dir);
-        let cache_file = cache_file.clone();
-        let workspace = workspace.clone();
-        let timestamp_updater_handle =
-            thread::spawn(move || update_timestamps(&old_source_dir, &new_source_dir1, &workspace));
-        let cache_saver_handle =
-            thread::spawn(move || save_new_cache(&new_source_dir2, &cache_file));
-        (timestamp_updater_handle, cache_saver_handle)
-    };
-
-    timestamp_updater_handle.join().unwrap();
-    cache_saver_handle.join().unwrap();
+    // Then save the new cache
+    save_new_cache(&new_source_dir, &cache_file);
 
     let total_time = start.elapsed();
     info!(
