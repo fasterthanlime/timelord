@@ -1,4 +1,5 @@
-#[doc = include_str!("../README.md")]
+#![doc = include_str!("../README.md")]
+
 // Always use eprintln! instead of println! for output
 use camino::Utf8PathBuf;
 use ignore::DirEntry;

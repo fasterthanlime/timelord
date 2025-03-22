@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/timelord.svg)](https://crates.io/crates/timelord)
 [![Documentation](https://docs.rs/timelord/badge.svg)](https://docs.rs/timelord)
-[![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/timelord.svg)](LICENSE)
+![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/timelord-cli.svg)
 
 A Rust library to preserve file timestamps (mtime) between builds, even with fresh git checkouts.
 
@@ -36,8 +36,8 @@ To ensure Timelord works properly, especially in CI environments, it's important
 Licensed under either of
 
  * Apache License, Version 2.0
-   ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+   ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
  * MIT license
-   ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+   ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
