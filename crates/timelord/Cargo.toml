@@ -2,6 +2,13 @@
 name = "timelord"
 version = "3.0.0"
 edition = "2024"
+authors = ["Amos Wenger <amos@bearcove.eu>"]
+description = "A Rust library to preserve file timestamps (mtime) between builds, even with fresh git checkouts"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/fasterthanlime/timelord"
+keywords = ["timestamp", "mtime", "build", "ci"]
+categories = ["development-tools::build-utils", "filesystem"]
 
 [dependencies]
 bincode = { version = "2.0.1", features = ["serde"] }
