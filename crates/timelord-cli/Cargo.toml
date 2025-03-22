@@ -15,7 +15,7 @@ name = "timelord"
 path = "src/main.rs"
 
 [dependencies]
-timelord = { path = "../timelord" }
+timelord = { path = "../timelord", version = "3.0.0" }
 camino = { version = "1.1.9", features = ["serde1"] }
 clap = { version = "4.5.32", features = ["derive"] }
 env_logger = "0.11.7"
