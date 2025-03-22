@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "timelord"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "bincode",
  "camino",
@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "timelord-cli"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "camino",
  "clap",

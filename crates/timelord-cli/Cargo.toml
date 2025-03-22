@@ -1,6 +1,6 @@
 [package]
 name = "timelord-cli"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2024"
 authors = ["Amos Wenger <amos@bearcove.eu>"]
 description = "A command-line interface for timelord, a Rust tool to preserve file timestamps (mtime) between CI builds"
