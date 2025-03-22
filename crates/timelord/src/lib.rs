@@ -87,6 +87,7 @@ pub fn walk_source_dir(workspace: &Workspace) -> Cache {
     let entries = Arc::new(Mutex::new(BTreeMap::new()));
 
     WalkBuilder::new(&workspace.source_dir)
+        .standard_filters(false)
         .build_parallel()
         .run(|| {
             let entries_clone = Arc::clone(&entries);
